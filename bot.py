@@ -59,13 +59,13 @@ def send_command(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     with task_lock:
         if user_id in ACTIVE_TASKS:
-            update.message.reply_text("You already have an active task. Please wait for it to complete.")
+            update.message.reply_text("You already have an active task\. Please wait for it to complete\.")
             return ConversationHandler.END
-    update.message.reply_text("Please send me the URL or magnet link to process.")
+    update.message.reply_text("Please send me the URL or magnet link to process\.")
     return AWAIT_LINK
 
 def info_updater_thread(update: Update, context: CallbackContext, user_id: int):
-    message = update.message.reply_text("`Querying status...`", parse_mode=ParseMode.MARKDOWN_V2)
+    message = update.message.reply_text("`Querying status\.\.\.`", parse_mode=ParseMode.MARKDOWN_V2)
     message_id = message.message_id
     last_text = ""
     while True:
@@ -90,13 +90,13 @@ def info_command(update: Update, context: CallbackContext) -> None:
                 ACTIVE_TASKS[user_id]['info_thread_running'] = True
                 threading.Thread(target=info_updater_thread, args=(update, context, user_id), daemon=True).start()
             else:
-                update.message.reply_text("A live status update is already active for your task.")
+                update.message.reply_text("A live status update is already active for your task\.")
         else:
-            update.message.reply_text("You have no active tasks.")
+            update.message.reply_text("You have no active tasks\.")
 
 def savedlinks_command(update: Update, context: CallbackContext) -> None:
     with context.bot_data['data_lock']: saved_links = context.bot_data['saved_links']
-    if not saved_links: update.message.reply_text("No links have been saved yet."); return
+    if not saved_links: update.message.reply_text("No links have been saved yet\."); return
     message = "*\-\-\- Saved Links \-\-\-*\n\n"
     for filename, link in saved_links.items():
         message += f"*File:* `{escape_markdown(filename)}`\n*Link:* {escape_markdown(link)}\n\n"
@@ -112,18 +112,18 @@ def h_command(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(get_server_status_message(total, used, free, total_bw), parse_mode=ParseMode.MARKDOWN_V2)
 
 def cancel(update: Update, context: CallbackContext) -> int:
-    update.message.reply_text('Operation cancelled. Note: any in-progress download/upload will continue.')
+    update.message.reply_text('Operation cancelled\. Note: any in\-progress download/upload will continue\.')
     return ConversationHandler.END
 
 def receive_link(update: Update, context: CallbackContext) -> int:
     url = update.message.text.strip()
     context.user_data['url'] = url
-    message = update.message.reply_text("_Fetching file details..._", parse_mode=ParseMode.MARKDOWN_V2)
+    message = update.message.reply_text("_Fetching file details\.\.\._", parse_mode=ParseMode.MARKDOWN_V2)
     original_filename = "magnet_download"
     if url.startswith('http'):
         original_filename = get_http_filename(url)
         if not original_filename:
-            message.edit_text("Could not fetch file details. Please check the URL."); return ConversationHandler.END
+            message.edit_text("Could not fetch file details\. Please check the URL\."); return ConversationHandler.END
     ext = os.path.splitext(original_filename)[1]
     base_name = os.path.splitext(original_filename)[0]
     context.user_data['original_filename'] = original_filename
@@ -148,7 +148,7 @@ def start_worker_and_notify(update: Update, context: CallbackContext, final_file
     def on_task_complete():
         with task_lock:
             if user_id in ACTIVE_TASKS: del ACTIVE_TASKS[user_id]
-    with task_lock: ACTIVE_TASKS[user_id] = {'status_text': 'Initializing...', 'info_thread_running': False}
+    with task_lock: ACTIVE_TASKS[user_id] = {'status_text': 'Initializing\.\.\.', 'info_thread_running': False}
     executor.submit(worker_task, url, final_filename, user_id, chat_id, context,
                     BUZZHEAVIER_ACCOUNT_ID, BUZZHEAVIER_ROOT_DIR_ID,
                     update_status_in_active_tasks, on_task_complete)
@@ -156,7 +156,7 @@ def start_worker_and_notify(update: Update, context: CallbackContext, final_file
 
 def filename_choice_handler(update: Update, context: CallbackContext) -> int:
     query = update.callback_query; query.answer(); choice = query.data
-    if choice == 'custom': query.edit_message_text("Please reply with your desired custom filename."); return AWAIT_CUSTOM_NAME
+    if choice == 'custom': query.edit_message_text("Please reply with your desired custom filename\."); return AWAIT_CUSTOM_NAME
     filename_map = {'full': context.user_data['original_filename'], 'smart': context.user_data['smart_name'], 'short': context.user_data['short_name']}
     final_filename = filename_map[choice]
     return start_worker_and_notify(update, context, final_filename)
