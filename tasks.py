@@ -6,13 +6,16 @@ import re
 import requests
 import libtorrent as lt
 from urllib.parse import urlparse, unquote
+# NEW: Import Retry and HTTPAdapter for robust uploads
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from utils import (
     escape_markdown, format_bytes, format_time, progress_bar, 
     UploadProgressTracker, DOWNLOAD_PATH, LOGGER
 )
 
-# ... (download_http, download_magnet, upload_file functions are unchanged) ...
+# ... (get_http_filename, download_http, download_magnet functions are unchanged) ...
 def get_http_filename(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
@@ -87,6 +90,7 @@ def download_magnet(magnet_link, filename, update_status_callback):
     except Exception as e: LOGGER.error(f"Torrent download failed: {e}"); return None, 0
     finally: ses.pause()
 
+# --- MODIFIED FUNCTION ---
 def upload_file(filepath, final_filename, update_status_callback, account_id, root_dir_id):
     upload_url = f"https://w.buzzheavier.com/{root_dir_id}/{final_filename}"
     headers = {"Authorization": f"Bearer {account_id}"}
@@ -101,19 +105,32 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
                f"`{escape_markdown(format_bytes(uploaded))}` of `{escape_markdown(format_bytes(file_size))}`\n"
                f"*Speed:* {escape_markdown(f'{format_bytes(speed)}/s')}\n*ETA:* {escape_markdown(format_time(eta))}")
         update_status_callback(msg)
+        
+    # NEW: Create a session with a retry strategy
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,  # Total number of retries
+        backoff_factor=1,  # Wait 1s, 2s, 4s between retries
+        status_forcelist=[500, 502, 503, 504], # Retry on server errors
+        allowed_methods=["PUT"] # Important: Allow retries for PUT requests
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    
     try:
         LOGGER.info(f"Starting upload for: {final_filename}")
         with open(filepath, 'rb') as f:
             data = UploadProgressTracker(f, progress_callback, file_size)
-            response = requests.put(upload_url, data=data, headers=headers, timeout=10800)
+            # CHANGED: Use the session object instead of requests directly
+            response = session.put(upload_url, data=data, headers=headers, timeout=10800)
             response.raise_for_status()
         buzz_link = response.text.strip()
         LOGGER.info(f"Finished upload for: {final_filename}")
         return file_size, buzz_link
     except Exception as e:
-        LOGGER.error(f"Upload failed for {final_filename}: {e}")
+        LOGGER.error(f"Upload failed for {final_filename} after retries: {e}")
         return None, None
-
+# --- END OF MODIFIED FUNCTION ---
 
 def worker_task(url, final_filename, user_id, chat_id, context, account_id, root_dir_id, update_status_callback, on_complete_callback):
     LOGGER.info(f"[USER:{user_id}] Worker task started for file: {final_filename}")
