@@ -5,7 +5,7 @@ import time
 import re
 import requests
 import libtorrent as lt
-import json # NEW: Import json to parse API response
+import json
 from urllib.parse import urlparse, unquote
 
 from utils import (
@@ -13,7 +13,7 @@ from utils import (
     UploadProgressTracker, DOWNLOAD_PATH, LOGGER
 )
 
-# ... (get_http_filename, download_http, download_magnet functions are unchanged) ...
+# ... (get_http_filename and download_http functions are unchanged) ...
 def get_http_filename(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
@@ -74,11 +74,12 @@ def download_magnet(magnet_link, filename, update_status_callback):
             if current_time - last_update_time > 2:
                 state = ['queued','checking','dl metadata','downloading','finished','seeding'][s.state]
                 eta = (s.total_wanted - s.total_wanted_done) / s.download_rate if s.download_rate > 0 else -1
+                # MODIFIED: Changed s.num_seeds to s.list_seeds and s.num_leechers to s.list_leechers for libtorrent 2.x compatibility
                 msg = (f"*Status:* {escape_markdown(state.capitalize())} `{escape_markdown(sanitized_torrent_name)}`\n"
                        f"{progress_bar(s.progress * 100)} {escape_markdown(f'{s.progress * 100:.2f}%')}\n"
                        f"`{escape_markdown(format_bytes(s.total_wanted_done))}` of `{escape_markdown(format_bytes(s.total_wanted))}`\n"
                        f"*Speed:* {escape_markdown(f'{format_bytes(s.download_rate)}/s')}\n"
-                       f"*Peers:* {escape_markdown(f'{s.num_peers} (S:{s.num_seeds}, L:{s.num_leechers})')}\n*ETA:* {escape_markdown(format_time(eta))}")
+                       f"*Peers:* {escape_markdown(f'{s.num_peers} (S:{s.list_seeds}, L:{s.list_leechers})')}\n*ETA:* {escape_markdown(format_time(eta))}")
                 update_status_callback(msg); last_update_time = current_time
             time.sleep(1)
         LOGGER.info(f"Finished magnet download for: {filename}")
@@ -108,8 +109,6 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
             data = UploadProgressTracker(f, progress_callback, file_size)
             response = requests.put(upload_url, data=data, headers=headers, timeout=10800)
             response.raise_for_status()
-
-        # MODIFIED: Parse the JSON response to build the correct link
         try:
             response_data = response.json()
             file_id = response_data.get('data', {}).get('id')
@@ -119,11 +118,10 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
                 return file_size, buzz_link
             else:
                 LOGGER.error(f"Upload HTTP status OK, but API response missing 'id' for {final_filename}: {response.text}")
-                return None, None # Treat as failure
+                return None, None
         except json.JSONDecodeError:
             LOGGER.error(f"Upload HTTP status OK, but failed to decode JSON from API for {final_filename}: {response.text}")
-            return None, None # Treat as failure
-
+            return None, None
     except Exception as e:
         LOGGER.error(f"Upload failed for {final_filename}: {e}")
         return None, None
@@ -139,18 +137,14 @@ def worker_task(url, final_filename, user_id, chat_id, context, account_id, root
             filepath, size = download_magnet(url, final_filename, update_status_callback)
         else:
             filepath, size = download_http(url, final_filename, update_status_callback)
-
         if not filepath:
             final_status = f"❌ *Download failed for* `{escape_markdown(final_filename)}`\."
             update_status_callback(final_status)
-            return  # The 'finally' block will still run before the function returns
-
+            return
         LOGGER.info(f"[USER:{user_id}] Download complete. Size: {format_bytes(size)}. Starting upload...")
         with context.bot_data['data_lock']:
             context.bot_data['stats']['downloaded'] += size
-
         upload_size, buzz_link = upload_file(filepath, final_filename, update_status_callback, account_id, root_dir_id)
-        
         if upload_size and buzz_link:
             with context.bot_data['data_lock']:
                 context.bot_data['stats']['uploaded'] += upload_size
@@ -164,23 +158,19 @@ def worker_task(url, final_filename, user_id, chat_id, context, account_id, root
         else:
             final_status = f"❌ *Upload failed for* `{escape_markdown(final_filename)}`\."
             update_status_callback(final_status)
-            
     except Exception as e:
         LOGGER.error(f"[USER:{user_id}] Unhandled exception in worker_task for {final_filename}: {e}", exc_info=True)
         final_status = f"❌ *An unexpected error occurred for* `{escape_markdown(final_filename)}`\."
         try:
             update_status_callback(final_status)
         except Exception:
-            pass # Suppress errors during error reporting
+            pass
     finally:
         if filepath and os.path.exists(filepath):
             os.remove(filepath)
             LOGGER.info(f"Cleaned up local file: {filepath}")
-        
-        # Ensure a final status is always set before finishing
         if not final_status:
             final_status = f" A task for `{escape_markdown(final_filename)}` finished with an unknown state\."
             LOGGER.warning(f"[USER:{user_id}] Worker for {final_filename} finished without a final status.")
-        
         on_complete_callback(final_status)
         LOGGER.info(f"[USER:{user_id}] Worker task finished for file: {final_filename}")
