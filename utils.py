@@ -5,7 +5,36 @@ import re
 import time
 import requests
 import json
+import logging # NEW: Import logging
 from telegram.utils.helpers import escape_markdown as escape_markdown_v2
+
+# NEW: Create a single, named logger for the entire application
+LOGGER = logging.getLogger("SecureFetchBot")
+
+# NEW: Function to configure the logger with a minimalist, colored format
+def setup_logger():
+    handler = logging.StreamHandler()
+    log_format = "[%(asctime)s] [%(levelname)-8s] %(message)s"
+    
+    try:
+        from colorlog import ColoredFormatter
+        formatter = ColoredFormatter(
+            '%(log_color)s' + log_format,
+            datefmt='%Y-%m-%d %H:%M:%S',
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'red,bg_white',
+            }
+        )
+    except ImportError:
+        formatter = logging.Formatter(log_format, datefmt='%Y-%m-%d %H:%M:%S')
+
+    handler.setFormatter(formatter)
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
 
 DOWNLOAD_PATH = os.path.join(os.getcwd(), "downloads")
 
@@ -47,18 +76,21 @@ def fetch_root_dir_id(account_id: str) -> str | None:
     url = "https://buzzheavier.com/api/fs"
     headers = {"Authorization": f"Bearer {account_id}"}
     try:
+        LOGGER.info("Fetching BuzzHeavier Root Directory ID...") # NEW
         response = requests.get(url, headers=headers, timeout=10)
         data = response.json()
         if response.status_code == 200 and data.get('code') == 200 and 'id' in data.get('data', {}):
-            return data['data']['id']
+            root_id = data['data']['id']
+            LOGGER.info(f"Successfully fetched Root ID: {root_id}") # NEW
+            return root_id
         else:
             error_message = data.get('message', f"HTTP Status {response.status_code}")
-            print(f"CRITICAL API Error from BuzzHeavier: {error_message}")
+            LOGGER.critical(f"API Error from BuzzHeavier: {error_message}") # MODIFIED
             return None
     except requests.exceptions.RequestException as e:
-        print(f"CRITICAL: Could not connect to BuzzHeavier. Error: {e}")
+        LOGGER.critical(f"Could not connect to BuzzHeavier API. Error: {e}") # MODIFIED
     except json.JSONDecodeError:
-        print("CRITICAL: Received invalid JSON from BuzzHeavier API.")
+        LOGGER.critical("Received invalid JSON from BuzzHeavier API.") # MODIFIED
     return None
 
 class UploadProgressTracker:
