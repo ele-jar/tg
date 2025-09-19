@@ -35,7 +35,8 @@ task_lock = threading.Lock()
 (AWAIT_LINK, AWAIT_FILENAME_CHOICE, AWAIT_CUSTOM_NAME) = range(3)
 
 def load_data(context: CallbackContext):
-    context.bot_data['data_lock'] = threading.Lock()
+    # CHANGED: Use RLock to prevent deadlocks when a thread needs to acquire the same lock multiple times.
+    context.bot_data['data_lock'] = threading.RLock()
     stats_data = {"downloaded": 0, "uploaded": 0}; links_data = {}
     if os.path.exists(STATS_FILE):
         try:
