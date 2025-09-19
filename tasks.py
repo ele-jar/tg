@@ -65,7 +65,6 @@ def download_magnet(magnet_link, filename, update_status_callback):
     try:
         handle = lt.add_magnet_uri(ses, magnet_link, params); ses.start_dht()
         
-        # MODIFIED: Add status update for fetching metadata.
         update_status_callback(f"*Status:* Fetching metadata for `{escape_markdown(filename)}`\.\.\.")
         LOGGER.info("Waiting for torrent metadata...")
 
@@ -73,10 +72,9 @@ def download_magnet(magnet_link, filename, update_status_callback):
         
         info = handle.get_torrent_info(); sanitized_torrent_name = re.sub(r'[<>:"/\\|?*]', '_', info.name())
         
-        # MODIFIED: Add status update after metadata is received.
         update_status_callback(f"*Status:* Metadata received for `{escape_markdown(sanitized_torrent_name)}`\.\nStarting download\.\.\.")
         LOGGER.info(f"Metadata received. Torrent name: {sanitized_torrent_name}")
-        time.sleep(2) # Give user a moment to see the message
+        time.sleep(2)
         
         last_update_time = 0
         while not handle.status().is_seeding:
@@ -85,12 +83,17 @@ def download_magnet(magnet_link, filename, update_status_callback):
                 state = ['queued','checking','dl metadata','downloading','finished','seeding'][s.state]
                 eta = (s.total_wanted - s.total_wanted_done) / s.download_rate if s.download_rate > 0 else -1
                 
-                # MODIFIED: Robustly get seeder/leecher counts for different libtorrent versions.
+                # MODIFIED: Final, most robust method to get seeder/leecher counts.
+                seeds = 0
+                leechers = 0
                 if hasattr(s, 'list_seeds'):
                     seeds = s.list_seeds
-                    leechers = s.list_leechers
-                else:
+                elif hasattr(s, 'num_seeds'):
                     seeds = s.num_seeds
+                
+                if hasattr(s, 'list_leechers'):
+                    leechers = s.list_leechers
+                elif hasattr(s, 'num_leechers'):
                     leechers = s.num_leechers
 
                 msg = (f"*Status:* {escape_markdown(state.capitalize())} `{escape_markdown(sanitized_torrent_name)}`\n"
