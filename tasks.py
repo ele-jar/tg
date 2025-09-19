@@ -5,6 +5,7 @@ import time
 import re
 import requests
 import libtorrent as lt
+import json # NEW: Import json to parse API response
 from urllib.parse import urlparse, unquote
 
 from utils import (
@@ -12,7 +13,7 @@ from utils import (
     UploadProgressTracker, DOWNLOAD_PATH, LOGGER
 )
 
-# ... (download_http, download_magnet, upload_file functions are unchanged) ...
+# ... (get_http_filename, download_http, download_magnet functions are unchanged) ...
 def get_http_filename(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
@@ -107,9 +108,22 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
             data = UploadProgressTracker(f, progress_callback, file_size)
             response = requests.put(upload_url, data=data, headers=headers, timeout=10800)
             response.raise_for_status()
-        buzz_link = response.text.strip()
-        LOGGER.info(f"Finished upload for: {final_filename}")
-        return file_size, buzz_link
+
+        # MODIFIED: Parse the JSON response to build the correct link
+        try:
+            response_data = response.json()
+            file_id = response_data.get('data', {}).get('id')
+            if file_id:
+                buzz_link = f"https://buzzheavier.com/{file_id}"
+                LOGGER.info(f"Finished upload for: {final_filename}. Link: {buzz_link}")
+                return file_size, buzz_link
+            else:
+                LOGGER.error(f"Upload HTTP status OK, but API response missing 'id' for {final_filename}: {response.text}")
+                return None, None # Treat as failure
+        except json.JSONDecodeError:
+            LOGGER.error(f"Upload HTTP status OK, but failed to decode JSON from API for {final_filename}: {response.text}")
+            return None, None # Treat as failure
+
     except Exception as e:
         LOGGER.error(f"Upload failed for {final_filename}: {e}")
         return None, None
