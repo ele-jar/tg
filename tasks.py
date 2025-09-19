@@ -117,27 +117,31 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
 
 def worker_task(url, final_filename, user_id, chat_id, context, account_id, root_dir_id, update_status_callback, on_complete_callback):
     LOGGER.info(f"[USER:{user_id}] Worker task started for file: {final_filename}")
-    filepath, size, final_status = (None, 0, "") # MODIFIED
+    filepath, size = None, 0
+    final_status = ""
     try:
         update_status_callback(f"*Status:* Preparing task for `{escape_markdown(final_filename)}`\.")
-        if url.startswith("magnet:"): filepath, size = download_magnet(url, final_filename, update_status_callback)
-        else: filepath, size = download_http(url, final_filename, update_status_callback)
-        
+        if url.startswith("magnet:"):
+            filepath, size = download_magnet(url, final_filename, update_status_callback)
+        else:
+            filepath, size = download_http(url, final_filename, update_status_callback)
+
         if not filepath:
             final_status = f"❌ *Download failed for* `{escape_markdown(final_filename)}`\."
-            update_status_callback(final_status); return
+            update_status_callback(final_status)
+            return  # The 'finally' block will still run before the function returns
 
         LOGGER.info(f"[USER:{user_id}] Download complete. Size: {format_bytes(size)}. Starting upload...")
         with context.bot_data['data_lock']:
             context.bot_data['stats']['downloaded'] += size
-            # We don't save here to avoid frequent disk I/O. Will be saved on success or exit.
 
         upload_size, buzz_link = upload_file(filepath, final_filename, update_status_callback, account_id, root_dir_id)
+        
         if upload_size and buzz_link:
             with context.bot_data['data_lock']:
                 context.bot_data['stats']['uploaded'] += upload_size
                 context.bot_data['saved_links'][final_filename] = buzz_link
-                context.bot_data['save_stats']() # Save stats on full success
+                context.bot_data['save_stats']()
             LOGGER.info(f"[USER:{user_id}] Upload complete for: {final_filename}")
             final_message = f"✅ *Upload successful\!*\n\n*File:* `{escape_markdown(final_filename)}`\n*Link:* {escape_markdown(buzz_link)}"
             context.bot.send_message(chat_id, final_message, parse_mode='MarkdownV2', disable_web_page_preview=True)
@@ -146,9 +150,23 @@ def worker_task(url, final_filename, user_id, chat_id, context, account_id, root
         else:
             final_status = f"❌ *Upload failed for* `{escape_markdown(final_filename)}`\."
             update_status_callback(final_status)
+            
+    except Exception as e:
+        LOGGER.error(f"[USER:{user_id}] Unhandled exception in worker_task for {final_filename}: {e}", exc_info=True)
+        final_status = f"❌ *An unexpected error occurred for* `{escape_markdown(final_filename)}`\."
+        try:
+            update_status_callback(final_status)
+        except Exception:
+            pass # Suppress errors during error reporting
     finally:
         if filepath and os.path.exists(filepath):
             os.remove(filepath)
             LOGGER.info(f"Cleaned up local file: {filepath}")
-        on_complete_callback(final_status) # MODIFIED: Pass final status
+        
+        # Ensure a final status is always set before finishing
+        if not final_status:
+            final_status = f" A task for `{escape_markdown(final_filename)}` finished with an unknown state\."
+            LOGGER.warning(f"[USER:{user_id}] Worker for {final_filename} finished without a final status.")
+        
+        on_complete_callback(final_status)
         LOGGER.info(f"[USER:{user_id}] Worker task finished for file: {final_filename}")
