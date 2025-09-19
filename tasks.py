@@ -9,9 +9,10 @@ from urllib.parse import urlparse, unquote
 
 from utils import (
     escape_markdown, format_bytes, format_time, progress_bar, 
-    UploadProgressTracker, DOWNLOAD_PATH
+    UploadProgressTracker, DOWNLOAD_PATH, LOGGER
 )
 
+# ... (download_http, download_magnet, upload_file functions are unchanged) ...
 def get_http_filename(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
@@ -26,50 +27,46 @@ def get_http_filename(url):
                     return fname
             return unquote(os.path.basename(urlparse(r.url).path))
     except requests.RequestException as e:
-        print(f"Failed to get filename from URL {url}: {e}")
+        LOGGER.error(f"Failed to get filename from URL {url}: {e}")
         return None
 
 def download_http(url, filename, update_status_callback):
     filepath = os.path.join(DOWNLOAD_PATH, filename)
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
+        LOGGER.info(f"Starting HTTP download for: {filename}")
         with requests.get(url, stream=True, allow_redirects=True, timeout=30, headers=headers) as r:
             r.raise_for_status()
             total_size = int(r.headers.get('content-length', 0))
-            downloaded = 0
-            start_time = time.time()
-            last_update_time = 0
+            downloaded = 0; start_time = time.time(); last_update_time = 0
             with open(filepath, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=1024*1024):
                     if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        current_time = time.time()
+                        f.write(chunk); downloaded += len(chunk); current_time = time.time()
                         if current_time - last_update_time > 2:
-                            elapsed = current_time - start_time
-                            speed = downloaded / elapsed if elapsed > 0 else 0
+                            elapsed = current_time - start_time; speed = downloaded / elapsed if elapsed > 0 else 0
                             progress = (downloaded / total_size) * 100 if total_size > 0 else 0
                             eta = ((total_size - downloaded) / speed) if speed > 0 else -1
                             msg = (f"*Status:* Downloading `{escape_markdown(filename)}`\n"
                                    f"{progress_bar(progress)} {escape_markdown(f'{progress:.2f}%')}\n"
                                    f"`{escape_markdown(format_bytes(downloaded))}` of `{escape_markdown(format_bytes(total_size))}`\n"
                                    f"*Speed:* {escape_markdown(f'{format_bytes(speed)}/s')}\n*ETA:* {escape_markdown(format_time(eta))}")
-                            update_status_callback(msg)
-                            last_update_time = current_time
+                            update_status_callback(msg); last_update_time = current_time
+        LOGGER.info(f"Finished HTTP download for: {filename}")
         return filepath, downloaded
     except Exception as e:
-        print(f"HTTP Download failed for {filename}: {e}")
+        LOGGER.error(f"HTTP download failed for {filename}: {e}")
         return None, 0
 
 def download_magnet(magnet_link, filename, update_status_callback):
-    ses = lt.session({'listen_interfaces': '0.0.0.0:6881'})
-    params = {'save_path': DOWNLOAD_PATH}
+    LOGGER.info(f"Starting magnet download for: {filename}")
+    ses = lt.session({'listen_interfaces': '0.0.0.0:6881'}); params = {'save_path': DOWNLOAD_PATH}
     try:
-        handle = lt.add_magnet_uri(ses, magnet_link, params)
-        ses.start_dht()
+        handle = lt.add_magnet_uri(ses, magnet_link, params); ses.start_dht()
+        LOGGER.info("Waiting for torrent metadata...")
         while not handle.has_metadata(): time.sleep(1)
-        info = handle.get_torrent_info()
-        sanitized_torrent_name = re.sub(r'[<>:"/\\|?*]', '_', info.name())
+        info = handle.get_torrent_info(); sanitized_torrent_name = re.sub(r'[<>:"/\\|?*]', '_', info.name())
+        LOGGER.info(f"Metadata received. Torrent name: {sanitized_torrent_name}")
         last_update_time = 0
         while not handle.status().is_seeding:
             s = handle.status(); current_time = time.time()
@@ -83,11 +80,11 @@ def download_magnet(magnet_link, filename, update_status_callback):
                        f"*Peers:* {escape_markdown(f'{s.num_peers} (S:{s.num_seeds}, L:{s.num_leechers})')}\n*ETA:* {escape_markdown(format_time(eta))}")
                 update_status_callback(msg); last_update_time = current_time
             time.sleep(1)
-        original_path = os.path.join(DOWNLOAD_PATH, sanitized_torrent_name)
-        final_path = os.path.join(DOWNLOAD_PATH, filename)
+        LOGGER.info(f"Finished magnet download for: {filename}")
+        original_path = os.path.join(DOWNLOAD_PATH, sanitized_torrent_name); final_path = os.path.join(DOWNLOAD_PATH, filename)
         if os.path.exists(original_path): os.rename(original_path, final_path); return final_path, info.total_size()
         else: raise FileNotFoundError(f"Torrent file not found: {original_path}")
-    except Exception as e: print(f"Torrent download failed: {e}"); return None, 0
+    except Exception as e: LOGGER.error(f"Torrent download failed: {e}"); return None, 0
     finally: ses.pause()
 
 def upload_file(filepath, final_filename, update_status_callback, account_id, root_dir_id):
@@ -96,8 +93,7 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
     file_size = os.path.getsize(filepath)
 
     def progress_callback(uploaded, total, start_time):
-        elapsed = time.time() - start_time
-        speed = uploaded / elapsed if elapsed > 0 else 0
+        elapsed = time.time() - start_time; speed = uploaded / elapsed if elapsed > 0 else 0
         percentage = (uploaded / total) * 100 if total > 0 else 0
         eta = ((total - uploaded) / speed) if speed > 0 else -1
         msg = (f"*Status:* Uploading `{escape_markdown(final_filename)}`\n"
@@ -105,40 +101,54 @@ def upload_file(filepath, final_filename, update_status_callback, account_id, ro
                f"`{escape_markdown(format_bytes(uploaded))}` of `{escape_markdown(format_bytes(file_size))}`\n"
                f"*Speed:* {escape_markdown(f'{format_bytes(speed)}/s')}\n*ETA:* {escape_markdown(format_time(eta))}")
         update_status_callback(msg)
-
     try:
+        LOGGER.info(f"Starting upload for: {final_filename}")
         with open(filepath, 'rb') as f:
             data = UploadProgressTracker(f, progress_callback, file_size)
             response = requests.put(upload_url, data=data, headers=headers, timeout=10800)
             response.raise_for_status()
         buzz_link = response.text.strip()
+        LOGGER.info(f"Finished upload for: {final_filename}")
         return file_size, buzz_link
     except Exception as e:
-        print(f"Upload failed for {final_filename}: {e}")
+        LOGGER.error(f"Upload failed for {final_filename}: {e}")
         return None, None
 
+
 def worker_task(url, final_filename, user_id, chat_id, context, account_id, root_dir_id, update_status_callback, on_complete_callback):
-    filepath, size = (None, 0)
+    LOGGER.info(f"[USER:{user_id}] Worker task started for file: {final_filename}")
+    filepath, size, final_status = (None, 0, "") # MODIFIED
     try:
         update_status_callback(f"*Status:* Preparing task for `{escape_markdown(final_filename)}`\.")
         if url.startswith("magnet:"): filepath, size = download_magnet(url, final_filename, update_status_callback)
         else: filepath, size = download_http(url, final_filename, update_status_callback)
-        if not filepath: update_status_callback(f"❌ *Download failed for* `{escape_markdown(final_filename)}`\."); return
+        
+        if not filepath:
+            final_status = f"❌ *Download failed for* `{escape_markdown(final_filename)}`\."
+            update_status_callback(final_status); return
 
+        LOGGER.info(f"[USER:{user_id}] Download complete. Size: {format_bytes(size)}. Starting upload...")
         with context.bot_data['data_lock']:
             context.bot_data['stats']['downloaded'] += size
-            context.bot_data['save_stats']()
+            # We don't save here to avoid frequent disk I/O. Will be saved on success or exit.
 
         upload_size, buzz_link = upload_file(filepath, final_filename, update_status_callback, account_id, root_dir_id)
         if upload_size and buzz_link:
             with context.bot_data['data_lock']:
                 context.bot_data['stats']['uploaded'] += upload_size
                 context.bot_data['saved_links'][final_filename] = buzz_link
-                context.bot_data['save_stats']()
+                context.bot_data['save_stats']() # Save stats on full success
+            LOGGER.info(f"[USER:{user_id}] Upload complete for: {final_filename}")
             final_message = f"✅ *Upload successful\!*\n\n*File:* `{escape_markdown(final_filename)}`\n*Link:* {escape_markdown(buzz_link)}"
             context.bot.send_message(chat_id, final_message, parse_mode='MarkdownV2', disable_web_page_preview=True)
-            update_status_callback(f"✅ *Task complete for:* `{escape_markdown(final_filename)}`")
-        else: update_status_callback(f"❌ *Upload failed for* `{escape_markdown(final_filename)}`\.")
+            final_status = f"✅ *Task complete for:* `{escape_markdown(final_filename)}`"
+            update_status_callback(final_status)
+        else:
+            final_status = f"❌ *Upload failed for* `{escape_markdown(final_filename)}`\."
+            update_status_callback(final_status)
     finally:
-        if filepath and os.path.exists(filepath): os.remove(filepath)
-        on_complete_callback()
+        if filepath and os.path.exists(filepath):
+            os.remove(filepath)
+            LOGGER.info(f"Cleaned up local file: {filepath}")
+        on_complete_callback(final_status) # MODIFIED: Pass final status
+        LOGGER.info(f"[USER:{user_id}] Worker task finished for file: {final_filename}")
