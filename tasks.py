@@ -64,24 +64,43 @@ def download_magnet(magnet_link, filename, update_status_callback):
     ses = lt.session({'listen_interfaces': '0.0.0.0:6881'}); params = {'save_path': DOWNLOAD_PATH}
     try:
         handle = lt.add_magnet_uri(ses, magnet_link, params); ses.start_dht()
+        
+        # MODIFIED: Add status update for fetching metadata.
+        update_status_callback(f"*Status:* Fetching metadata for `{escape_markdown(filename)}`\.\.\.")
         LOGGER.info("Waiting for torrent metadata...")
+
         while not handle.has_metadata(): time.sleep(1)
+        
         info = handle.get_torrent_info(); sanitized_torrent_name = re.sub(r'[<>:"/\\|?*]', '_', info.name())
+        
+        # MODIFIED: Add status update after metadata is received.
+        update_status_callback(f"*Status:* Metadata received for `{escape_markdown(sanitized_torrent_name)}`\.\nStarting download\.\.\.")
         LOGGER.info(f"Metadata received. Torrent name: {sanitized_torrent_name}")
+        time.sleep(2) # Give user a moment to see the message
+        
         last_update_time = 0
         while not handle.status().is_seeding:
             s = handle.status(); current_time = time.time()
             if current_time - last_update_time > 2:
                 state = ['queued','checking','dl metadata','downloading','finished','seeding'][s.state]
                 eta = (s.total_wanted - s.total_wanted_done) / s.download_rate if s.download_rate > 0 else -1
-                # MODIFIED: Changed s.num_seeds to s.list_seeds and s.num_leechers to s.list_leechers for libtorrent 2.x compatibility
+                
+                # MODIFIED: Robustly get seeder/leecher counts for different libtorrent versions.
+                if hasattr(s, 'list_seeds'):
+                    seeds = s.list_seeds
+                    leechers = s.list_leechers
+                else:
+                    seeds = s.num_seeds
+                    leechers = s.num_leechers
+
                 msg = (f"*Status:* {escape_markdown(state.capitalize())} `{escape_markdown(sanitized_torrent_name)}`\n"
                        f"{progress_bar(s.progress * 100)} {escape_markdown(f'{s.progress * 100:.2f}%')}\n"
                        f"`{escape_markdown(format_bytes(s.total_wanted_done))}` of `{escape_markdown(format_bytes(s.total_wanted))}`\n"
                        f"*Speed:* {escape_markdown(f'{format_bytes(s.download_rate)}/s')}\n"
-                       f"*Peers:* {escape_markdown(f'{s.num_peers} (S:{s.list_seeds}, L:{s.list_leechers})')}\n*ETA:* {escape_markdown(format_time(eta))}")
+                       f"*Peers:* {escape_markdown(f'{s.num_peers} (S:{seeds}, L:{leechers})')}\n*ETA:* {escape_markdown(format_time(eta))}")
                 update_status_callback(msg); last_update_time = current_time
             time.sleep(1)
+            
         LOGGER.info(f"Finished magnet download for: {filename}")
         original_path = os.path.join(DOWNLOAD_PATH, sanitized_torrent_name); final_path = os.path.join(DOWNLOAD_PATH, filename)
         if os.path.exists(original_path): os.rename(original_path, final_path); return final_path, info.total_size()
